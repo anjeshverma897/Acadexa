@@ -1,11 +1,17 @@
-import { useState } from "react";
+
+import { useEffect, useState } from "react";
+import {
+  STORAGE_KEYS,
+  DATA_UPDATED_EVENT,
+  readArray,
+  writeStorage,
+} from "../utils/storage";
 
 function Task() {
-  // Load tasks
-  const [tasks, setTasks] = useState(() => {
-    const savedTasks = localStorage.getItem("acadexa_tasks");
-    return savedTasks ? JSON.parse(savedTasks) : [];
-  });
+  // Load tasks safely.
+  const [tasks, setTasks] = useState(() =>
+    readArray(STORAGE_KEYS.tasks)
+  );
 
   // Form
   const [title, setTitle] = useState("");
@@ -13,38 +19,76 @@ function Task() {
   const [priority, setPriority] = useState("Medium");
   const [deadline, setDeadline] = useState("");
 
-  // Search & filter
+  // Search and filter
   const [search, setSearch] = useState("");
   const [filterPriority, setFilterPriority] = useState("All");
 
   // Editing
   const [editingId, setEditingId] = useState(null);
 
-  // Save
-  const saveTasks = (updatedTasks) => {
-    setTasks(updatedTasks);
+  // Synchronize changes from other pages and browser tabs.
+  useEffect(() => {
+    function refreshTasks() {
+      setTasks(readArray(STORAGE_KEYS.tasks));
+    }
 
-    localStorage.setItem(
-      "acadexa_tasks",
-      JSON.stringify(updatedTasks)
+    function handleStorage(event) {
+      if (
+        !event.key ||
+        event.key === STORAGE_KEYS.tasks
+      ) {
+        refreshTasks();
+      }
+    }
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", refreshTasks);
+    window.addEventListener(DATA_UPDATED_EVENT, refreshTasks);
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", refreshTasks);
+      window.removeEventListener(
+        DATA_UPDATED_EVENT,
+        refreshTasks
+      );
+    };
+  }, []);
+
+  // Save tasks using the shared storage utility.
+  function saveTasks(updatedTasks) {
+    const saved = writeStorage(
+      STORAGE_KEYS.tasks,
+      updatedTasks
     );
-  };
 
-  // Add / Update
-  const handleSubmit = (e) => {
-    e.preventDefault();
+    if (saved) {
+      setTasks(updatedTasks);
+      return true;
+    }
+
+    alert(
+      "Unable to save tasks. Please check your browser storage and try again."
+    );
+
+    return false;
+  }
+
+  // Add or update a task.
+  function handleSubmit(event) {
+    event.preventDefault();
 
     if (!title.trim()) {
-      alert("Please enter a task title");
+      alert("Please enter a task title.");
       return;
     }
 
     if (!deadline) {
-      alert("Please select a deadline");
+      alert("Please select a deadline.");
       return;
     }
 
-    if (editingId) {
+    if (editingId !== null) {
       const updatedTasks = tasks.map((task) =>
         task.id === editingId
           ? {
@@ -57,11 +101,15 @@ function Task() {
           : task
       );
 
-      saveTasks(updatedTasks);
-      setEditingId(null);
+      if (saveTasks(updatedTasks)) {
+        setEditingId(null);
+        clearForm();
+      }
     } else {
       const newTask = {
-        id: Date.now(),
+        id: `${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 9)}`,
         title: title.trim(),
         subject: subject.trim() || "General",
         priority,
@@ -69,43 +117,42 @@ function Task() {
         completed: false,
       };
 
-      saveTasks([...tasks, newTask]);
+      if (saveTasks([...tasks, newTask])) {
+        clearForm();
+      }
     }
+  }
 
-    clearForm();
-  };
-
-  // Clear form
-  const clearForm = () => {
+  // Clear form.
+  function clearForm() {
     setTitle("");
     setSubject("");
     setPriority("Medium");
     setDeadline("");
-  };
+  }
 
-  // Edit
-  const editTask = (task) => {
+  // Edit task.
+  function editTask(task) {
     setEditingId(task.id);
-
-    setTitle(task.title);
-    setSubject(task.subject);
-    setPriority(task.priority);
-    setDeadline(task.deadline);
+    setTitle(task.title || "");
+    setSubject(task.subject || "");
+    setPriority(task.priority || "Medium");
+    setDeadline(task.deadline || "");
 
     window.scrollTo({
       top: 0,
       behavior: "smooth",
     });
-  };
+  }
 
-  // Cancel edit
-  const cancelEdit = () => {
+  // Cancel editing.
+  function cancelEdit() {
     setEditingId(null);
     clearForm();
-  };
+  }
 
-  // Complete
-  const toggleTask = (id) => {
+  // Toggle task completion.
+  function toggleTask(id) {
     const updatedTasks = tasks.map((task) =>
       task.id === id
         ? {
@@ -116,33 +163,49 @@ function Task() {
     );
 
     saveTasks(updatedTasks);
-  };
+  }
 
-  // Delete
-  const deleteTask = (id) => {
+  // Delete task.
+  function deleteTask(id) {
     const updatedTasks = tasks.filter(
       (task) => task.id !== id
     );
 
-    saveTasks(updatedTasks);
-  };
+    if (saveTasks(updatedTasks) && editingId === id) {
+      setEditingId(null);
+      clearForm();
+    }
+  }
 
-  // Format date
-  const formatDeadline = (date) => {
+  // Format deadline.
+  function formatDeadline(date) {
     if (!date) return "No deadline";
 
-    return new Date(date).toLocaleDateString(
-      "en-IN",
-      {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      }
-    );
-  };
+    // Parse date-only values in local time to avoid
+    // displaying the previous day in some time zones.
+    const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? (() => {
+          const [year, month, day] = date
+            .split("-")
+            .map(Number);
 
-  // Overdue
-  const isOverdue = (task) => {
+          return new Date(year, month - 1, day);
+        })()
+      : new Date(date);
+
+    if (Number.isNaN(parsedDate.getTime())) {
+      return "Invalid date";
+    }
+
+    return parsedDate.toLocaleDateString("en-IN", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  }
+
+  // Check overdue tasks.
+  function isOverdue(task) {
     if (task.completed || !task.deadline) {
       return false;
     }
@@ -150,19 +213,38 @@ function Task() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const deadlineDate = new Date(task.deadline);
+    const deadlineDate = /^\d{4}-\d{2}-\d{2}$/.test(
+      task.deadline
+    )
+      ? (() => {
+          const [year, month, day] = task.deadline
+            .split("-")
+            .map(Number);
+
+          return new Date(year, month - 1, day);
+        })()
+      : new Date(task.deadline);
+
+    if (Number.isNaN(deadlineDate.getTime())) {
+      return false;
+    }
+
     deadlineDate.setHours(0, 0, 0, 0);
 
     return deadlineDate < today;
-  };
+  }
 
-  // Filter tasks
+  // Search and filter tasks.
+  const searchText = search.trim().toLowerCase();
+
   const filteredTasks = tasks.filter((task) => {
-    const searchText = search.toLowerCase();
-
     const matchesSearch =
-      task.title.toLowerCase().includes(searchText) ||
-      task.subject.toLowerCase().includes(searchText);
+      String(task.title || "")
+        .toLowerCase()
+        .includes(searchText) ||
+      String(task.subject || "")
+        .toLowerCase()
+        .includes(searchText);
 
     const matchesPriority =
       filterPriority === "All" ||
@@ -171,7 +253,7 @@ function Task() {
     return matchesSearch && matchesPriority;
   });
 
-  // Statistics
+  // Statistics.
   const pendingTasks = tasks.filter(
     (task) => !task.completed
   ).length;
@@ -186,22 +268,14 @@ function Task() {
 
   return (
     <div className="tasks-page">
-
-      {/* HEADER */}
-
+      {/* Header */}
       <div className="tasks-header">
         <h1>Tasks</h1>
-
-        <p>
-          Manage your academic tasks
-        </p>
+        <p>Manage your academic tasks</p>
       </div>
 
-
-      {/* STATISTICS */}
-
+      {/* Statistics */}
       <div className="task-stats">
-
         <div className="task-stat">
           <span>Total</span>
           <strong>{tasks.length}</strong>
@@ -221,74 +295,57 @@ function Task() {
           <span>Overdue</span>
           <strong>{overdueTasks}</strong>
         </div>
-
       </div>
 
-
-      {/* ADD / EDIT */}
-
+      {/* Add / Edit */}
       <div className="task-form-card">
-
-        <h2>
-          {editingId
-            ? "Edit Task"
-            : "Add New Task"}
-        </h2>
+        <h2>{editingId !== null ? "Edit Task" : "Add New Task"}</h2>
 
         <form onSubmit={handleSubmit}>
-
           <input
             type="text"
             placeholder="Task title"
             value={title}
-            onChange={(e) =>
-              setTitle(e.target.value)
+            onChange={(event) =>
+              setTitle(event.target.value)
             }
+            required
           />
 
           <input
             type="text"
             placeholder="Subject"
             value={subject}
-            onChange={(e) =>
-              setSubject(e.target.value)
+            onChange={(event) =>
+              setSubject(event.target.value)
             }
           />
 
           <select
             value={priority}
-            onChange={(e) =>
-              setPriority(e.target.value)
+            onChange={(event) =>
+              setPriority(event.target.value)
             }
           >
-            <option value="High">
-              High
-            </option>
-
-            <option value="Medium">
-              Medium
-            </option>
-
-            <option value="Low">
-              Low
-            </option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
           </select>
 
           <input
             type="date"
             value={deadline}
-            onChange={(e) =>
-              setDeadline(e.target.value)
+            onChange={(event) =>
+              setDeadline(event.target.value)
             }
+            required
           />
 
           <button type="submit">
-            {editingId
-              ? "Update Task"
-              : "+ Add Task"}
+            {editingId !== null ? "Update Task" : "+ Add Task"}
           </button>
 
-          {editingId && (
+          {editingId !== null && (
             <button
               type="button"
               className="cancel-btn"
@@ -297,180 +354,118 @@ function Task() {
               Cancel
             </button>
           )}
-
         </form>
-
       </div>
 
-
-      {/* SEARCH & FILTER */}
-
+      {/* Search and Filter */}
       <div className="task-controls">
-
         <input
           type="text"
           placeholder="🔍 Search tasks or subjects..."
           value={search}
-          onChange={(e) =>
-            setSearch(e.target.value)
+          onChange={(event) =>
+            setSearch(event.target.value)
           }
         />
 
         <select
           value={filterPriority}
-          onChange={(e) =>
-            setFilterPriority(e.target.value)
+          onChange={(event) =>
+            setFilterPriority(event.target.value)
           }
         >
-          <option value="All">
-            All Priorities
-          </option>
-
-          <option value="High">
-            High
-          </option>
-
-          <option value="Medium">
-            Medium
-          </option>
-
-          <option value="Low">
-            Low
-          </option>
+          <option value="All">All Priorities</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
         </select>
-
       </div>
 
-
-      {/* TASK LIST */}
-
+      {/* Task List */}
       <div className="task-list-card">
-
         <div className="task-list-header">
-
-          <h2>
-            My Tasks
-          </h2>
-
-          <span>
-            {filteredTasks.length} Tasks
-          </span>
-
+          <h2>My Tasks</h2>
+          <span>{filteredTasks.length} Tasks</span>
         </div>
 
-
         {filteredTasks.length === 0 ? (
-
           <div className="empty-task">
-
-            <div className="empty-icon">
-              📋
-            </div>
-
-            <p>
-              No tasks found
-            </p>
-
+            <div className="empty-icon">📋</div>
+            <p>No tasks found</p>
           </div>
-
         ) : (
+          filteredTasks.map((task) => {
+            const taskPriority = [
+              "High",
+              "Medium",
+              "Low",
+            ].includes(task.priority)
+              ? task.priority
+              : "Medium";
 
-          filteredTasks.map((task) => (
-
-            <div
-              className={`task-row ${
-                task.completed
-                  ? "task-completed"
-                  : ""
-              }`}
-              key={task.id}
-            >
-
-              {/* CHECKBOX */}
-
-              <input
-                type="checkbox"
-                checked={task.completed}
-                onChange={() =>
-                  toggleTask(task.id)
-                }
-              />
-
-
-              {/* TASK INFO */}
-
-              <div className="task-info">
-
-                <h3>
-                  {task.title}
-                </h3>
-
-                <p>
-                  {task.subject}
-                </p>
-
-              </div>
-
-
-              {/* PRIORITY */}
-
-              <span
-                className={`priority ${task.priority.toLowerCase()}`}
-              >
-                {task.priority}
-              </span>
-
-
-              {/* DEADLINE */}
-
-              <span
-                className={`task-deadline ${
-                  isOverdue(task)
-                    ? "overdue"
-                    : ""
+            return (
+              <div
+                className={`task-row ${
+                  task.completed ? "task-completed" : ""
                 }`}
+                key={task.id}
               >
-                📅 {formatDeadline(task.deadline)}
+                {/* Checkbox */}
+                <input
+                  type="checkbox"
+                  checked={Boolean(task.completed)}
+                  onChange={() => toggleTask(task.id)}
+                  aria-label={`Complete ${task.title}`}
+                />
 
-                {isOverdue(task) && (
-                  <small>
-                    Overdue
-                  </small>
-                )}
-              </span>
+                {/* Task Info */}
+                <div className="task-info">
+                  <h3>{task.title}</h3>
+                  <p>{task.subject || "General"}</p>
+                </div>
 
+                {/* Priority */}
+                <span
+                  className={`priority ${taskPriority.toLowerCase()}`}
+                >
+                  {taskPriority}
+                </span>
 
-              {/* EDIT */}
+                {/* Deadline */}
+                <span
+                  className={`task-deadline ${
+                    isOverdue(task) ? "overdue" : ""
+                  }`}
+                >
+                  📅 {formatDeadline(task.deadline)}
 
-              <button
-                className="edit-btn"
-                onClick={() =>
-                  editTask(task)
-                }
-              >
-                Edit
-              </button>
+                  {isOverdue(task) && (
+                    <small>Overdue</small>
+                  )}
+                </span>
 
+                {/* Edit */}
+                <button
+                  type="button"
+                  className="edit-btn"
+                  onClick={() => editTask(task)}
+                >
+                  Edit
+                </button>
 
-              {/* DELETE */}
-
-              <button
-                className="delete-btn"
-                onClick={() =>
-                  deleteTask(task.id)
-                }
-              >
-                Delete
-              </button>
-
-            </div>
-
-          ))
-
+                {/* Delete */}
+                <button
+                  type="button"
+                  className="delete-btn"
+                  onClick={() => deleteTask(task.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            );
+          })
         )}
-
       </div>
-
     </div>
   );
 }

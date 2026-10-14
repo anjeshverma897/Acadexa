@@ -1,43 +1,102 @@
 
-import { useState } from "react";
-
-const STORAGE_KEY = "acadexa_exams";
+import { useEffect, useState } from "react";
+import {
+  STORAGE_KEYS,
+  DATA_UPDATED_EVENT,
+  readArray,
+  writeStorage,
+} from "../utils/storage";
 
 function getToday() {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
+
   return `${year}-${month}-${day}`;
 }
 
-function loadExams() {
-  try {
-    const saved = JSON.parse(
-      localStorage.getItem(STORAGE_KEY) || "[]"
-    );
-    return Array.isArray(saved) ? saved : [];
-  } catch {
-    return [];
-  }
+function getDaysRemaining(dateString) {
+  if (!dateString) return null;
+
+  const [year, month, day] = dateString.split("-").map(Number);
+  const examDate = new Date(year, month - 1, day);
+  const today = new Date();
+
+  if (Number.isNaN(examDate.getTime())) return null;
+
+  today.setHours(0, 0, 0, 0);
+  examDate.setHours(0, 0, 0, 0);
+
+  return Math.round(
+    (examDate.getTime() - today.getTime()) / 86400000
+  );
+}
+
+function formatDate(dateString) {
+  if (!dateString) return "Date not set";
+
+  const [year, month, day] = dateString.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+
+  if (Number.isNaN(date.getTime())) return "Invalid date";
+
+  return date.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function Exam() {
-  const [exams, setExams] = useState(loadExams);
+  const [exams, setExams] = useState(() =>
+    readArray(STORAGE_KEYS.exams)
+  );
+
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState("");
-  const [date, setDate] = useState(getToday());
+  const [date, setDate] = useState(getToday);
   const [type, setType] = useState("Midterm");
   const [notes, setNotes] = useState("");
   const [editingId, setEditingId] = useState(null);
 
-  function saveExams(updated) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      setExams(updated);
-    } catch {
-      alert("Unable to save exams in browser storage.");
+  // Synchronize exam data across Acadexa pages and browser tabs.
+  useEffect(() => {
+    function refreshExams() {
+      setExams(readArray(STORAGE_KEYS.exams));
     }
+
+    function handleStorage(event) {
+      if (!event.key || event.key === STORAGE_KEYS.exams) {
+        refreshExams();
+      }
+    }
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", refreshExams);
+    window.addEventListener(DATA_UPDATED_EVENT, refreshExams);
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", refreshExams);
+      window.removeEventListener(
+        DATA_UPDATED_EVENT,
+        refreshExams
+      );
+    };
+  }, []);
+
+  // Save through the shared storage utility.
+  function saveExams(updated) {
+    const saved = writeStorage(STORAGE_KEYS.exams, updated);
+
+    if (saved) {
+      setExams(updated);
+      return true;
+    }
+
+    alert("Unable to save exams in browser storage.");
+    return false;
   }
 
   function resetForm() {
@@ -49,8 +108,8 @@ function Exam() {
     setEditingId(null);
   }
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  function handleSubmit(event) {
+    event.preventDefault();
 
     if (!title.trim() || !subject.trim() || !date) {
       alert("Please fill in the exam title, subject, and date.");
@@ -65,109 +124,93 @@ function Exam() {
       notes: notes.trim(),
     };
 
+    let saved = false;
+
     if (editingId !== null) {
-      saveExams(
-        exams.map((exam) =>
-          exam.id === editingId
-            ? { ...exam, ...examData }
-            : exam
-        )
+      const updated = exams.map((exam) =>
+        exam.id === editingId
+          ? { ...exam, ...examData }
+          : exam
       );
+
+      saved = saveExams(updated);
     } else {
-      saveExams([
-        ...exams,
-        {
-          id: `${Date.now()}-${Math.random()}`,
-          ...examData,
-          completed: false,
-        },
-      ]);
+      const newExam = {
+        id: `${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 9)}`,
+        ...examData,
+        completed: false,
+      };
+
+      saved = saveExams([...exams, newExam]);
     }
 
-    resetForm();
+    if (saved) {
+      resetForm();
+    }
   }
 
   function editExam(exam) {
     setEditingId(exam.id);
-    setTitle(exam.title);
-    setSubject(exam.subject);
-    setDate(exam.date);
-    setType(exam.type);
+    setTitle(exam.title || "");
+    setSubject(exam.subject || "");
+    setDate(exam.date || getToday());
+    setType(exam.type || "Midterm");
     setNotes(exam.notes || "");
 
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
   }
 
   function deleteExam(id) {
-    if (window.confirm("Delete this exam?")) {
-      saveExams(exams.filter((exam) => exam.id !== id));
+    if (!window.confirm("Delete this exam?")) return;
 
-      if (editingId === id) {
-        resetForm();
-      }
+    const updated = exams.filter((exam) => exam.id !== id);
+
+    if (saveExams(updated) && editingId === id) {
+      resetForm();
     }
   }
 
   function toggleCompleted(id) {
-    saveExams(
-      exams.map((exam) =>
-        exam.id === id
-          ? { ...exam, completed: !exam.completed }
-          : exam
-      )
+    const updated = exams.map((exam) =>
+      exam.id === id
+        ? { ...exam, completed: !exam.completed }
+        : exam
     );
-  }
 
-  function daysRemaining(dateString) {
-    const [year, month, day] = dateString.split("-").map(Number);
-    const examDate = new Date(year, month - 1, day);
-    const today = new Date();
-
-    today.setHours(0, 0, 0, 0);
-    examDate.setHours(0, 0, 0, 0);
-
-    return Math.round(
-      (examDate.getTime() - today.getTime()) / 86400000
-    );
-  }
-
-  function formatDate(dateString) {
-    const [year, month, day] = dateString.split("-").map(Number);
-
-    return new Date(year, month - 1, day).toLocaleDateString(
-      "en-IN",
-      {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      }
-    );
+    saveExams(updated);
   }
 
   const sortedExams = [...exams].sort((a, b) =>
-    a.date.localeCompare(b.date)
+    (a.date || "").localeCompare(b.date || "")
   );
 
-  const upcomingCount = exams.filter(
-    (exam) =>
-      !exam.completed && daysRemaining(exam.date) >= 0
-  ).length;
+  const upcomingCount = exams.filter((exam) => {
+    const days = getDaysRemaining(exam.date);
+    return !exam.completed && days !== null && days >= 0;
+  }).length;
 
   const completedCount = exams.filter(
     (exam) => exam.completed
   ).length;
 
-  const overdueCount = exams.filter(
-    (exam) =>
-      !exam.completed && daysRemaining(exam.date) < 0
-  ).length;
+  const overdueCount = exams.filter((exam) => {
+    const days = getDaysRemaining(exam.date);
+    return !exam.completed && days !== null && days < 0;
+  }).length;
 
   return (
     <div className="exam-page">
       <header className="exam-header">
         <div>
           <h1>Exams Manager 📚</h1>
-          <p>Organize exams, track deadlines, and prepare confidently.</p>
+          <p>
+            Organize exams, track deadlines, and prepare confidently.
+          </p>
         </div>
       </header>
 
@@ -194,16 +237,18 @@ function Exam() {
         </div>
       </section>
 
-      {/* Form */}
+      {/* Add or edit exam */}
       <section className="exam-card">
-        <h2>{editingId !== null ? "Edit Exam" : "Add New Exam"}</h2>
+        <h2>
+          {editingId !== null ? "Edit Exam" : "Add New Exam"}
+        </h2>
 
         <form className="exam-form" onSubmit={handleSubmit}>
           <label>
             Exam Title
             <input
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(event) => setTitle(event.target.value)}
               placeholder="e.g. Midterm Examination"
               required
             />
@@ -213,7 +258,7 @@ function Exam() {
             Subject
             <input
               value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              onChange={(event) => setSubject(event.target.value)}
               placeholder="e.g. Linear Control Systems"
               required
             />
@@ -224,7 +269,7 @@ function Exam() {
             <input
               type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(event) => setDate(event.target.value)}
               required
             />
           </label>
@@ -233,7 +278,7 @@ function Exam() {
             Exam Type
             <select
               value={type}
-              onChange={(e) => setType(e.target.value)}
+              onChange={(event) => setType(event.target.value)}
             >
               <option>Midterm</option>
               <option>End Semester</option>
@@ -249,14 +294,17 @@ function Exam() {
             Notes (optional)
             <textarea
               value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              onChange={(event) => setNotes(event.target.value)}
               placeholder="Syllabus, chapters, or preparation notes..."
-              rows="3"
+              rows={3}
             />
           </label>
 
           <div className="exam-form-actions">
-            <button type="submit" className="exam-primary-btn">
+            <button
+              type="submit"
+              className="exam-primary-btn"
+            >
               {editingId !== null ? "Save Changes" : "+ Add Exam"}
             </button>
 
@@ -286,7 +334,27 @@ function Exam() {
         ) : (
           <div className="exam-list">
             {sortedExams.map((exam) => {
-              const days = daysRemaining(exam.date);
+              const days = getDaysRemaining(exam.date);
+
+              const countdownClass = exam.completed
+                ? "exam-countdown-done"
+                : days !== null && days < 0
+                ? "exam-countdown-overdue"
+                : days !== null && days <= 7
+                ? "exam-countdown-soon"
+                : "";
+
+              let countdownText = "Date not set";
+
+              if (exam.completed) {
+                countdownText = "Completed";
+              } else if (days !== null && days < 0) {
+                countdownText = `${Math.abs(days)} days past`;
+              } else if (days === 0) {
+                countdownText = "Today!";
+              } else if (days !== null) {
+                countdownText = `${days} days left`;
+              }
 
               return (
                 <article className="exam-item" key={exam.id}>
@@ -314,23 +382,9 @@ function Exam() {
                   </div>
 
                   <div
-                    className={`exam-countdown ${
-                      exam.completed
-                        ? "exam-countdown-done"
-                        : days < 0
-                        ? "exam-countdown-overdue"
-                        : days <= 7
-                        ? "exam-countdown-soon"
-                        : ""
-                    }`}
+                    className={`exam-countdown ${countdownClass}`}
                   >
-                    {exam.completed
-                      ? "Completed"
-                      : days < 0
-                      ? `${Math.abs(days)} days past`
-                      : days === 0
-                      ? "Today!"
-                      : `${days} days left`}
+                    {countdownText}
                   </div>
 
                   <div className="exam-item-actions">

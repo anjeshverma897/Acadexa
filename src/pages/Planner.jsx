@@ -1,17 +1,11 @@
 
-import { useState } from "react";
-
-const STORAGE_KEY = "acadexa_study_sessions";
-
-function loadSessions() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    const parsed = saved ? JSON.parse(saved) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
+import { useEffect, useMemo, useState } from "react";
+import {
+  STORAGE_KEYS,
+  DATA_UPDATED_EVENT,
+  readArray,
+  writeStorage,
+} from "../utils/storage";
 
 function getLocalDate() {
   const now = new Date();
@@ -23,7 +17,9 @@ function getLocalDate() {
 }
 
 function Planner() {
-  const [sessions, setSessions] = useState(loadSessions);
+  const [sessions, setSessions] = useState(() =>
+    readArray(STORAGE_KEYS.sessions)
+  );
 
   const [subject, setSubject] = useState("DSA");
   const [topic, setTopic] = useState("");
@@ -32,22 +28,52 @@ function Planner() {
   const [duration, setDuration] = useState("1");
   const [filterDate, setFilterDate] = useState(getLocalDate);
 
-  // Save sessions
-  function saveSessions(updatedSessions) {
-    try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(updatedSessions)
+  // Refresh sessions if they change in another tab or page.
+  useEffect(() => {
+    function refreshSessions() {
+      setSessions(readArray(STORAGE_KEYS.sessions));
+    }
+
+    function handleStorage(event) {
+      if (
+        !event.key ||
+        event.key === STORAGE_KEYS.sessions
+      ) {
+        refreshSessions();
+      }
+    }
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", refreshSessions);
+    window.addEventListener(DATA_UPDATED_EVENT, refreshSessions);
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", refreshSessions);
+      window.removeEventListener(
+        DATA_UPDATED_EVENT,
+        refreshSessions
       );
+    };
+  }, []);
+
+  // Save sessions using the shared storage utility.
+  function saveSessions(updatedSessions) {
+    const saved = writeStorage(
+      STORAGE_KEYS.sessions,
+      updatedSessions
+    );
+
+    if (saved) {
       setSessions(updatedSessions);
-    } catch {
+    } else {
       alert("Unable to save sessions in this browser.");
     }
   }
 
-  // Add session
-  function handleSubmit(e) {
-    e.preventDefault();
+  // Add a study session.
+  function handleSubmit(event) {
+    event.preventDefault();
 
     if (!topic.trim()) {
       alert("Please enter a topic.");
@@ -59,13 +85,20 @@ function Planner() {
       return;
     }
 
+    const durationValue = Number(duration);
+
+    if (!Number.isFinite(durationValue) || durationValue <= 0) {
+      alert("Please select a valid session duration.");
+      return;
+    }
+
     const newSession = {
       id: `${Date.now()}-${Math.random()}`,
       subject,
       topic: topic.trim(),
       date,
       startTime,
-      duration: Number(duration),
+      duration: durationValue,
       completed: false,
     };
 
@@ -73,7 +106,7 @@ function Planner() {
     setTopic("");
   }
 
-  // Toggle completion
+  // Toggle session completion.
   function toggleSession(id) {
     const updated = sessions.map((session) =>
       session.id === id
@@ -84,19 +117,21 @@ function Planner() {
     saveSessions(updated);
   }
 
-  // Delete session
+  // Delete a session.
   function deleteSession(id) {
     saveSessions(
       sessions.filter((session) => session.id !== id)
     );
   }
 
-  // Sort and filter
-  const visibleSessions = sessions
-    .filter((session) => session.date === filterDate)
-    .sort((a, b) =>
-      (a.startTime || "").localeCompare(b.startTime || "")
-    );
+  // Filter and sort sessions for the selected date.
+  const visibleSessions = useMemo(() => {
+    return sessions
+      .filter((session) => session.date === filterDate)
+      .sort((a, b) =>
+        (a.startTime || "").localeCompare(b.startTime || "")
+      );
+  }, [sessions, filterDate]);
 
   const completedCount = sessions.filter(
     (session) => session.completed
@@ -105,7 +140,8 @@ function Planner() {
   const completedHours = sessions
     .filter((session) => session.completed)
     .reduce(
-      (total, session) => total + (Number(session.duration) || 0),
+      (total, session) =>
+        total + (Number(session.duration) || 0),
       0
     );
 
@@ -115,7 +151,12 @@ function Planner() {
     const [hours, minutes] = time.split(":");
     const parsedHours = Number(hours);
 
-    if (!Number.isFinite(parsedHours) || !minutes) {
+    if (
+      !Number.isFinite(parsedHours) ||
+      parsedHours < 0 ||
+      parsedHours > 23 ||
+      !minutes
+    ) {
       return time;
     }
 
@@ -148,7 +189,9 @@ function Planner() {
 
         <div className="planner-stat">
           <span>Completed Study Hours</span>
-          <strong>{completedHours} hrs</strong>
+          <strong>
+            {Number(completedHours.toFixed(2))} hrs
+          </strong>
         </div>
       </div>
 
@@ -161,7 +204,7 @@ function Planner() {
             Subject
             <select
               value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              onChange={(event) => setSubject(event.target.value)}
             >
               <option value="DSA">DSA</option>
               <option value="Web Development">Web Development</option>
@@ -178,7 +221,7 @@ function Planner() {
               type="text"
               placeholder="e.g. Graph Algorithms"
               value={topic}
-              onChange={(e) => setTopic(e.target.value)}
+              onChange={(event) => setTopic(event.target.value)}
               required
             />
           </label>
@@ -188,7 +231,7 @@ function Planner() {
             <input
               type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(event) => setDate(event.target.value)}
               required
             />
           </label>
@@ -198,7 +241,9 @@ function Planner() {
             <input
               type="time"
               value={startTime}
-              onChange={(e) => setStartTime(e.target.value)}
+              onChange={(event) =>
+                setStartTime(event.target.value)
+              }
               required
             />
           </label>
@@ -207,7 +252,9 @@ function Planner() {
             Duration
             <select
               value={duration}
-              onChange={(e) => setDuration(e.target.value)}
+              onChange={(event) =>
+                setDuration(event.target.value)
+              }
             >
               <option value="0.5">30 minutes</option>
               <option value="1">1 hour</option>
@@ -233,7 +280,9 @@ function Planner() {
             type="date"
             aria-label="Filter schedule by date"
             value={filterDate}
-            onChange={(e) => setFilterDate(e.target.value)}
+            onChange={(event) =>
+              setFilterDate(event.target.value)
+            }
           />
         </div>
 

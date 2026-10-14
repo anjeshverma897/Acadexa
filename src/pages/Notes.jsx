@@ -1,7 +1,11 @@
 
-import { useState } from "react";
-
-const STORAGE_KEY = "acadexa_notes";
+import { useEffect, useState } from "react";
+import {
+  STORAGE_KEYS,
+  DATA_UPDATED_EVENT,
+  readArray,
+  writeStorage,
+} from "../utils/storage";
 
 const CATEGORIES = [
   "DSA",
@@ -12,20 +16,11 @@ const CATEGORIES = [
   "Other",
 ];
 
-function loadNotes() {
-  try {
-    const data = JSON.parse(
-      localStorage.getItem(STORAGE_KEY) || "[]"
-    );
-
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
-  }
-}
-
 function Notes() {
-  const [notes, setNotes] = useState(loadNotes);
+  const [notes, setNotes] = useState(() =>
+    readArray(STORAGE_KEYS.notes)
+  );
+
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [category, setCategory] = useState("DSA");
@@ -33,17 +28,46 @@ function Notes() {
   const [filter, setFilter] = useState("All");
   const [editingId, setEditingId] = useState(null);
 
-  function saveNotes(updatedNotes) {
-    try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(updatedNotes)
-      );
-
-      setNotes(updatedNotes);
-    } catch {
-      alert("Unable to save notes in browser storage.");
+  // Synchronize notes across Acadexa pages and browser tabs.
+  useEffect(() => {
+    function refreshNotes() {
+      setNotes(readArray(STORAGE_KEYS.notes));
     }
+
+    function handleStorage(event) {
+      if (!event.key || event.key === STORAGE_KEYS.notes) {
+        refreshNotes();
+      }
+    }
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", refreshNotes);
+    window.addEventListener(DATA_UPDATED_EVENT, refreshNotes);
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", refreshNotes);
+      window.removeEventListener(
+        DATA_UPDATED_EVENT,
+        refreshNotes
+      );
+    };
+  }, []);
+
+  // Save through the shared storage utility.
+  function saveNotes(updatedNotes) {
+    const saved = writeStorage(
+      STORAGE_KEYS.notes,
+      updatedNotes
+    );
+
+    if (saved) {
+      setNotes(updatedNotes);
+      return true;
+    }
+
+    alert("Unable to save notes in browser storage.");
+    return false;
   }
 
   function resetForm() {
@@ -53,8 +77,9 @@ function Notes() {
     setEditingId(null);
   }
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  // Create or update a note.
+  function handleSubmit(event) {
+    event.preventDefault();
 
     if (!title.trim() || !content.trim()) {
       alert("Please enter a title and note content.");
@@ -62,6 +87,7 @@ function Notes() {
     }
 
     const now = new Date().toISOString();
+    let saved = false;
 
     if (editingId !== null) {
       const updated = notes.map((note) =>
@@ -76,10 +102,12 @@ function Notes() {
           : note
       );
 
-      saveNotes(updated);
+      saved = saveNotes(updated);
     } else {
       const newNote = {
-        id: `${Date.now()}-${Math.random()}`,
+        id: `${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 9)}`,
         title: title.trim(),
         content: content.trim(),
         category,
@@ -87,19 +115,24 @@ function Notes() {
         updatedAt: now,
       };
 
-      saveNotes([newNote, ...notes]);
+      saved = saveNotes([newNote, ...notes]);
     }
 
-    resetForm();
+    if (saved) {
+      resetForm();
+    }
   }
 
   function editNote(note) {
     setEditingId(note.id);
-    setTitle(note.title);
-    setContent(note.content);
-    setCategory(note.category);
+    setTitle(note.title || "");
+    setContent(note.content || "");
+    setCategory(note.category || "Other");
 
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
   }
 
   function deleteNote(id) {
@@ -107,20 +140,25 @@ function Notes() {
       return;
     }
 
-    saveNotes(notes.filter((note) => note.id !== id));
+    const updated = notes.filter((note) => note.id !== id);
 
-    if (editingId === id) {
+    if (saveNotes(updated) && editingId === id) {
       resetForm();
     }
   }
 
+  // Search, filter, and sort notes.
+  const query = search.trim().toLowerCase();
+
   const filteredNotes = [...notes]
     .filter((note) => {
-      const query = search.toLowerCase();
-
       const matchesSearch =
-        note.title.toLowerCase().includes(query) ||
-        note.content.toLowerCase().includes(query);
+        String(note.title || "")
+          .toLowerCase()
+          .includes(query) ||
+        String(note.content || "")
+          .toLowerCase()
+          .includes(query);
 
       const matchesCategory =
         filter === "All" || note.category === filter;
@@ -136,7 +174,13 @@ function Notes() {
   function formatDate(value) {
     if (!value) return "";
 
-    return new Date(value).toLocaleDateString("en-IN", {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+
+    return date.toLocaleDateString("en-IN", {
       day: "numeric",
       month: "short",
       year: "numeric",
@@ -145,10 +189,13 @@ function Notes() {
 
   return (
     <div className="notes-page">
+      {/* Header */}
       <header className="notes-header">
         <div>
           <h1>My Notes 📝</h1>
-          <p>Capture ideas, organize subjects, and revise faster.</p>
+          <p>
+            Capture ideas, organize subjects, and revise faster.
+          </p>
         </div>
 
         <span className="notes-count">
@@ -169,7 +216,7 @@ function Notes() {
               type="text"
               placeholder="e.g. Graph traversal algorithms"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(event) => setTitle(event.target.value)}
               required
             />
           </label>
@@ -178,7 +225,9 @@ function Notes() {
             Category
             <select
               value={category}
-              onChange={(e) => setCategory(e.target.value)}
+              onChange={(event) =>
+                setCategory(event.target.value)
+              }
             >
               {CATEGORIES.map((item) => (
                 <option key={item} value={item}>
@@ -194,14 +243,21 @@ function Notes() {
               placeholder="Write your concepts, formulas, examples, or revision points..."
               rows={7}
               value={content}
-              onChange={(e) => setContent(e.target.value)}
+              onChange={(event) =>
+                setContent(event.target.value)
+              }
               required
             />
           </label>
 
           <div className="notes-form-actions">
-            <button type="submit" className="notes-primary-btn">
-              {editingId !== null ? "Save Changes" : "+ Save Note"}
+            <button
+              type="submit"
+              className="notes-primary-btn"
+            >
+              {editingId !== null
+                ? "Save Changes"
+                : "+ Save Note"}
             </button>
 
             {editingId !== null && (
@@ -221,10 +277,7 @@ function Notes() {
       <section className="notes-library">
         <div className="notes-library-header">
           <h2>Notes Library</h2>
-
-          <span>
-            {filteredNotes.length} found
-          </span>
+          <span>{filteredNotes.length} found</span>
         </div>
 
         <div className="notes-filters">
@@ -232,13 +285,13 @@ function Notes() {
             type="search"
             placeholder="Search titles and content..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(event) => setSearch(event.target.value)}
             aria-label="Search notes"
           />
 
           <select
             value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            onChange={(event) => setFilter(event.target.value)}
             aria-label="Filter notes by category"
           >
             <option value="All">All Categories</option>
@@ -273,11 +326,13 @@ function Notes() {
               <article className="note-item" key={note.id}>
                 <div className="note-item-header">
                   <span className="note-category">
-                    {note.category}
+                    {note.category || "Other"}
                   </span>
 
                   <span className="note-date">
-                    {formatDate(note.updatedAt || note.createdAt)}
+                    {formatDate(
+                      note.updatedAt || note.createdAt
+                    )}
                   </span>
                 </div>
 

@@ -1382,3 +1382,51 @@
   font-size: 0.9em;
   overflow-wrap: anywhere;
 }
+
+.attach-btn {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 10px;
+  padding: 10px 13px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.attach-btn:hover {
+  background: rgba(128, 128, 128, 0.12);
+}
+
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.attachment-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  margin: 8px 0;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+
+.attachment-preview button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.attachment-image-preview {
+  display: block;
+  width: auto;
+  max-width: 180px;
+  max-height: 130px;
+  object-fit: contain;
+  border-radius: 8px;
+}
